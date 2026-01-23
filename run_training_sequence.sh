@@ -43,3 +43,6 @@ python fast_sac/train_fastdsac_torch_enhanced.py --env_name h1hand-stair-v0 --ex
 # h1hand_room
 # h1hand_insert_small
 # h1hand_insert_normal
+# G1JoystickFlatTerrain
+# Isaac-Velocity-Flat-H1-v0
+
