@@ -185,18 +185,26 @@ def main():
         list(qnet.parameters()),
         lr=args.critic_learning_rate,
         weight_decay=args.weight_decay,
+        fused=args.fused_adam,
+        betas=(0.9, 0.95) if args.tuned_betas else (0.9, 0.999),
     )
     actor_optimizer = optim.AdamW(
         list(actor.parameters()),
         lr=args.actor_learning_rate,
         weight_decay=args.weight_decay,
+        fused=args.fused_adam,
+        betas=(0.9, 0.95) if args.tuned_betas else (0.9, 0.999),
     )
 
-    target_entropy = -float(n_act)
+    target_entropy = 0.0
     log_alpha = torch.ones(1, requires_grad=True, device=device)
     log_alpha.data.copy_(torch.tensor([np.log(0.001)], device=device))
-    alpha_optimizer = optim.Adam([log_alpha], lr=args.critic_learning_rate)
-
+    alpha_optimizer = optim.AdamW(
+        [log_alpha], 
+        lr=args.alpha_learning_rate,
+        fused=args.fused_adam,
+        betas=(0.9, 0.999),
+    )
     rb = SimpleReplayBuffer(
         n_env=args.num_envs,
         buffer_size=args.buffer_size,

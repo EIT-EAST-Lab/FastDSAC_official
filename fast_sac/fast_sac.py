@@ -14,10 +14,13 @@ class QNetwork(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_obs + n_act, hidden_dim, device=device),
+            nn.LayerNorm(hidden_dim, device=device),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2, device=device),
+            nn.LayerNorm(hidden_dim // 2, device=device),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, hidden_dim // 4, device=device),
+            nn.LayerNorm(hidden_dim // 4, device=device),
             nn.ReLU(),
             nn.Linear(hidden_dim // 4, 1, device=device),
         )
@@ -123,6 +126,7 @@ class GaussianDistCritic(nn.Module):
         StochaQ2 = self.qnet2(obs, actions)
         return StochaQ1, StochaQ2
 
+#TODO (Jolyne): change the range?
 LOG_STD_MAX = 2
 LOG_STD_MIN = -5
 
@@ -135,17 +139,22 @@ class Actor(nn.Module):
         num_envs: int,
         init_scale: float,
         hidden_dim: int,
+        activation: nn.Module = nn.ReLU(),
+        use_layer_norm: bool = True,
         device: torch.device = None,
     ):
         super().__init__()
         self.n_act = n_act
         self.net = nn.Sequential(
             nn.Linear(n_obs, hidden_dim, device=device),
-            nn.ReLU(),
+            nn.LayerNorm(hidden_dim, device=device) if use_layer_norm else nn.Identity(),
+            activation,
             nn.Linear(hidden_dim, hidden_dim // 2, device=device),
-            nn.ReLU(),
+            nn.LayerNorm(hidden_dim // 2, device=device) if use_layer_norm else nn.Identity(),
+            activation,
             nn.Linear(hidden_dim // 2, hidden_dim // 4, device=device),
-            nn.ReLU(),
+            nn.LayerNorm(hidden_dim // 4, device=device) if use_layer_norm else nn.Identity(),
+            activation,
         )
 
         self.fc_mu = nn.Linear(hidden_dim // 4, n_act, device=device)
@@ -346,6 +355,271 @@ class DSACT_Actor_explr(nn.Module):
 
         return action, log_prob, mean
 
+class Hetero_DSACT_Actor(DSACT_Actor):
+    def __init__(
+        self,
+        n_obs: int,
+        n_act: int,
+        num_envs: int,
+        init_scale: float,
+        hidden_dim: int,
+        log_std_max: float = 0.5,
+        log_std_min: float = -20.0,
+        log_std_max_range: tuple[float, float] = (0.0, 2.0),
+        log_std_min_range: tuple[float, float] = (-20.0, -5.0),
+        activation: nn.Module = nn.ReLU(),
+        use_layer_norm: bool = True,
+        device: torch.device = None,
+    ):
+        super().__init__(
+            n_obs=n_obs,
+            n_act=n_act,
+            num_envs=num_envs,
+            init_scale=init_scale,
+            hidden_dim=hidden_dim,
+            log_std_max=log_std_max,
+            log_std_min=log_std_min,
+            activation=activation,
+            use_layer_norm=use_layer_norm,
+            device=device,
+        )
+        self.log_std_max_envs = torch.full((num_envs, 1), self.log_std_max, device=device)
+        self.log_std_min_envs = torch.full((num_envs, 1), self.log_std_min, device=device)
+
+        self.register_buffer("log_std_max_range", torch.as_tensor(log_std_max_range, device=device))
+        self.register_buffer("log_std_min_range", torch.as_tensor(log_std_min_range, device=device))
+
+        self.log_std_max = log_std_max_range[1]
+        self.log_std_min = log_std_min_range[0]
+
+    def forward(
+        self, obs: torch.Tensor, return_std: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = obs
+        x = self.net(x)
+        output = self.fc_out(x)
+        mean, log_std = torch.chunk(output, 2, dim=-1)
+        
+        # JAX implementation uses clip (clamp) instead of tanh squashing
+        log_std = torch.tanh(log_std)
+        # log_std_max = self.log_std_max_range[0] + (self.log_std_max_range[1] - self.log_std_max_range[0]) * torch.rand(x.shape[0], 1, device=obs.device)
+        # log_std_min = self.log_std_min_range[0] + (self.log_std_min_range[1] - self.log_std_min_range[0]) * torch.rand(x.shape[0], 1, device=obs.device)
+        # random_max = torch.rand(1, 1, device=obs.device)
+        # random_min = torch.rand(1, 1, device=obs.device)
+        # log_std_max = self.log_std_max_range[0] + (self.log_std_max_range[1] - self.log_std_max_range[0]) * random_max
+        # log_std_min = self.log_std_min_range[0] + (self.log_std_min_range[1] - self.log_std_min_range[0]) * random_min
+
+
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample()
+        y_t = torch.tanh(x_t)
+        action = y_t
+        log_prob = normal.log_prob(x_t)
+        # Enforcing Action Bound
+        log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+
+        if return_std:
+            return action, log_prob, mean, std
+
+        return action, log_prob, mean
+
+    def explore(
+        self, obs: torch.Tensor, dones: torch.Tensor = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # If dones is provided, resample noise for environments that are done
+        if dones is not None and dones.sum() > 0:
+            # Generate new noise scales for done environments (one per environment)
+            new_log_std_max = self.log_std_max_range[0] + (self.log_std_max_range[1] - self.log_std_max_range[0]) * torch.rand(self.n_envs, 1, device=obs.device)
+            new_log_std_min = self.log_std_min_range[0] + (self.log_std_min_range[1] - self.log_std_min_range[0]) * torch.rand(self.n_envs, 1, device=obs.device)
+
+            # Update only the noise scales for environments that are done
+            dones_view = dones.view(-1, 1) > 0
+            self.log_std_max_envs.copy_(
+                torch.where(dones_view, new_log_std_max, self.log_std_max_envs)
+            )
+            self.log_std_min_envs.copy_(
+                torch.where(dones_view, new_log_std_min, self.log_std_min_envs)
+            )
+
+        x = obs
+        x = self.net(x)
+        output = self.fc_out(x)
+        mean, log_std = torch.chunk(output, 2, dim=-1)
+        log_std = torch.tanh(log_std)
+        log_std = self.log_std_min_envs + 0.5 * (self.log_std_max_envs - self.log_std_min_envs) * (log_std + 1)
+
+        std = log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample()
+        y_t = torch.tanh(x_t)
+        action = y_t
+        log_prob = normal.log_prob(x_t)
+        # Enforcing Action Bound
+        log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+
+        return action, log_prob, mean
+
+
+    def forward_critic(
+        self, obs: torch.Tensor, return_std: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = obs
+        x = self.net(x)
+        output = self.fc_out(x)
+        mean, log_std = torch.chunk(output, 2, dim=-1)
+        
+        # 标准 log_std 处理
+        log_std = torch.tanh(log_std)
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+        std = log_std.exp()
+        
+        # 1. 原始高斯采样
+        dist = torch.distributions.Normal(mean, std)
+        z_raw = dist.rsample()  # 这是一个可能跑到 7.8 sigma 远的点
+        
+        # 2. 计算原始半径 r
+        # keepdim=True 很重要，防止广播错误
+        r = z_raw.norm(dim=-1, keepdim=True) + 1e-6 
+        
+        # 3. 设定你想要的“软截断”阈值 (比如 3.0 sigma)
+        # 这意味着绝大多数点会被压缩到 3.0 倍标准差以内
+        limit = 1.0  # TODO: randomize this
+        
+        # 4. 径向压缩变换 (Radial Squash)
+        # 公式: z_new = z_old * (limit * tanh(r / limit) / r)
+        # 物理含义：方向不变，长度从 r 变成 limit * tanh(r/limit)
+        # 当 r 很大时，新长度趋近于 limit
+        scale_factor = limit * torch.tanh(r / limit) / r
+        z_new = z_raw * scale_factor
+        
+        # 5. 生成最终 Action (过一次 Tanh 映射到 -1, 1)
+        # 注意：这里 z_new 已经是 mean + std * noise 经过处理后的结果了么？
+        # 等等，上面的 z_raw 包含了 mean。我们需要对“噪声”做压缩，还是对“最终分布”做压缩？
+        # 通常对“去中心化”的噪声做压缩更稳。但为了简单，直接对 z_raw (也就是 x_t) 做压缩也是完全合法的。
+        x_t = z_new
+        y_t = torch.tanh(x_t)
+        action = y_t
+        
+        # ================================================
+        # 核心：精确计算 Log Prob 的修正量
+        # ================================================
+        # 原始的高斯 log_prob
+        log_prob = dist.log_prob(z_raw).sum(dim=-1, keepdim=True)
+        
+        # 修正项 1: 径向压缩的 Jacobian (这一步是高维数学的关键)
+        # 公式推导：LogDet = Log(1 - tanh^2(r/k)) + (D-1) * (Log(tanh(r/k)) - Log(r/k) + Log(scale))
+        # 简化后，变化量的对数为：
+        dim = mean.shape[-1]
+        r_norm = r / limit
+        tanh_r = torch.tanh(r_norm)
+        
+        # 径向方向的压缩导数: 1 - tanh^2
+        log_det_radial = torch.log(1 - tanh_r.pow(2) + 1e-6)
+        
+        # 切向方向的压缩导数 (D-1 个维度): tanh(r)/r
+        # 注意: log(tanh(r)/r) = log(tanh(r)) - log(r)
+        log_det_tangential = (dim - 1) * (torch.log(tanh_r + 1e-6) - torch.log(r_norm + 1e-6))
+        
+        # 总的变换 Log Determinant (加上 limit 的缩放因子)
+        # 因为我们乘了 limit，体积扩大了 limit^D
+        log_det_total = log_det_radial + log_det_tangential # + dim * np.log(limit) (如果 z_raw 是标准正态分布需要加，这里 z_raw 已经是带 std 的了，相对关系不变，可以不加常数项)
+        
+        # 这里的 log_prob 是 p(z_new)，因为体积压缩了，密度变大了，所以 log_prob 应该变大
+        # p(y) = p(x) / |det|  => log p(y) = log p(x) - log |det|
+        log_prob = log_prob - log_det_total
+        
+        # 修正项 2: 标准 SAC 的 Tanh Jacobian
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6).sum(dim=-1, keepdim=True)
+        if return_std:
+            return action, log_prob, torch.tanh(mean), std
+
+        return action, log_prob, torch.tanh(mean)
+
+
+class Hetero_DSACT_Actor_explr(DSACT_Actor_explr):
+    def __init__(
+        self,
+        n_obs: int,
+        n_act: int,
+        num_envs: int,
+        init_scale: float,
+        hidden_dim: int,
+        log_std_max: float = 0.5,
+        log_std_min: float = -20.0,
+        log_std_max_range: tuple[float, float] = (0.0, 2.0),
+        log_std_min_range: tuple[float, float] = (-20.0, -5.0),
+        activation: nn.Module = nn.ReLU(),
+        use_layer_norm: bool = True,
+        device: torch.device = None,
+    ):
+        super().__init__(
+            n_obs=n_obs,
+            n_act=n_act,
+            num_envs=num_envs,
+            init_scale=init_scale,
+            hidden_dim=hidden_dim,
+            log_std_max=log_std_max,
+            log_std_min=log_std_min,
+            activation=activation,
+            use_layer_norm=use_layer_norm,
+            device=device,
+        )
+        self.log_std_max_envs = torch.full((num_envs, 1), self.log_std_max, device=device)
+        self.log_std_min_envs = torch.full((num_envs, 1), self.log_std_min, device=device)
+
+        self.register_buffer("log_std_max_range", torch.as_tensor(log_std_max_range, device=device))
+        self.register_buffer("log_std_min_range", torch.as_tensor(log_std_min_range, device=device))
+
+        self.log_std_max = log_std_max_range[1]
+        self.log_std_min = log_std_min_range[0]
+
+
+    def explore(
+        self, obs: torch.Tensor, dones: torch.Tensor = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # If dones is provided, resample noise for environments that are done
+        if dones is not None and dones.sum() > 0:
+            # Generate new noise scales for done environments (one per environment)
+            new_log_std_max = self.log_std_max_range[0] + (self.log_std_max_range[1] - self.log_std_max_range[0]) * torch.rand(self.n_envs, 1, device=obs.device)
+            new_log_std_min = self.log_std_min_range[0] + (self.log_std_min_range[1] - self.log_std_min_range[0]) * torch.rand(self.n_envs, 1, device=obs.device)
+
+            # Update only the noise scales for environments that are done
+            dones_view = dones.view(-1, 1) > 0
+            self.log_std_max_envs.copy_(
+                torch.where(dones_view, new_log_std_max, self.log_std_max_envs)
+            )
+            self.log_std_min_envs.copy_(
+                torch.where(dones_view, new_log_std_min, self.log_std_min_envs)
+            )
+
+        x = obs
+        x = self.net(x)
+        mean, log_std, explr_weight = torch.chunk(self.fc_out(x), 3, dim=-1)
+        explr_weight_logits = explr_weight / self.temperature
+        explr_weight_logits = torch.clamp(explr_weight_logits, -20, 20)
+        explr_weight = torch.softmax(explr_weight_logits, dim=-1) * self.n_act
+        
+        log_std = self.log_std_min_envs + 0.5 * (self.log_std_max_envs - self.log_std_min_envs) * (log_std + 1)
+
+        std = explr_weight * log_std.exp()
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample()
+        y_t = torch.tanh(x_t)
+        action = y_t
+        log_prob = normal.log_prob(x_t)
+        # Enforcing Action Bound
+        log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
+        log_prob = log_prob.sum(1, keepdim=True)
+        mean = torch.tanh(mean)
+
+        return action, log_prob, mean
 
 
 class DSACT_EnhancedActor(DSACT_Actor):
@@ -384,6 +658,79 @@ class DSACT_EnhancedActor(DSACT_Actor):
         self.register_buffer("scale_max", torch.as_tensor(scale_max, device=device))
 
 
+    def forward_critic(
+        self, obs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x = obs
+        x = self.net(x)
+        output = self.fc_out(x)
+        mean, log_std = torch.chunk(output, 2, dim=-1)
+        
+        # 标准 log_std 处理
+        log_std = torch.tanh(log_std)
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+        std = log_std.exp()
+        
+        # 1. 原始高斯采样
+        dist = torch.distributions.Normal(mean, std)
+        z_raw = dist.rsample()  # 这是一个可能跑到 7.8 sigma 远的点
+        
+        # 2. 计算原始半径 r
+        # keepdim=True 很重要，防止广播错误
+        r = z_raw.norm(dim=-1, keepdim=True) + 1e-6 
+        
+        # 3. 设定你想要的“软截断”阈值 (比如 3.0 sigma)
+        # 这意味着绝大多数点会被压缩到 3.0 倍标准差以内
+        limit = 3.0 
+        
+        # 4. 径向压缩变换 (Radial Squash)
+        # 公式: z_new = z_old * (limit * tanh(r / limit) / r)
+        # 物理含义：方向不变，长度从 r 变成 limit * tanh(r/limit)
+        # 当 r 很大时，新长度趋近于 limit
+        scale_factor = limit * torch.tanh(r / limit) / r
+        z_new = z_raw * scale_factor
+        
+        # 5. 生成最终 Action (过一次 Tanh 映射到 -1, 1)
+        # 注意：这里 z_new 已经是 mean + std * noise 经过处理后的结果了么？
+        # 等等，上面的 z_raw 包含了 mean。我们需要对“噪声”做压缩，还是对“最终分布”做压缩？
+        # 通常对“去中心化”的噪声做压缩更稳。但为了简单，直接对 z_raw (也就是 x_t) 做压缩也是完全合法的。
+        x_t = z_new
+        y_t = torch.tanh(x_t)
+        action = y_t
+        
+        # ================================================
+        # 核心：精确计算 Log Prob 的修正量
+        # ================================================
+        # 原始的高斯 log_prob
+        log_prob = dist.log_prob(z_raw).sum(dim=-1, keepdim=True)
+        
+        # 修正项 1: 径向压缩的 Jacobian (这一步是高维数学的关键)
+        # 公式推导：LogDet = Log(1 - tanh^2(r/k)) + (D-1) * (Log(tanh(r/k)) - Log(r/k) + Log(scale))
+        # 简化后，变化量的对数为：
+        dim = mean.shape[-1]
+        r_norm = r / limit
+        tanh_r = torch.tanh(r_norm)
+        
+        # 径向方向的压缩导数: 1 - tanh^2
+        log_det_radial = torch.log(1 - tanh_r.pow(2) + 1e-6)
+        
+        # 切向方向的压缩导数 (D-1 个维度): tanh(r)/r
+        # 注意: log(tanh(r)/r) = log(tanh(r)) - log(r)
+        log_det_tangential = (dim - 1) * (torch.log(tanh_r + 1e-6) - torch.log(r_norm + 1e-6))
+        
+        # 总的变换 Log Determinant (加上 limit 的缩放因子)
+        # 因为我们乘了 limit，体积扩大了 limit^D
+        log_det_total = log_det_radial + log_det_tangential # + dim * np.log(limit) (如果 z_raw 是标准正态分布需要加，这里 z_raw 已经是带 std 的了，相对关系不变，可以不加常数项)
+        
+        # 这里的 log_prob 是 p(z_new)，因为体积压缩了，密度变大了，所以 log_prob 应该变大
+        # p(y) = p(x) / |det|  => log p(y) = log p(x) - log |det|
+        log_prob = log_prob - log_det_total
+        
+        # 修正项 2: 标准 SAC 的 Tanh Jacobian
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6).sum(dim=-1, keepdim=True)
+
+        return action, log_prob, torch.tanh(mean)
+
     def explore(
         self, obs: torch.Tensor, dones: torch.Tensor = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -421,6 +768,131 @@ class DSACT_EnhancedActor(DSACT_Actor):
 
         return action, log_prob, mean
 
+    def explore_sphere_uniform(
+        self, obs: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+
+
+        x = obs
+        x = self.net(x)
+        mean, log_std = torch.chunk(self.fc_out(x), 2, dim=-1)
+        log_std = torch.tanh(log_std)
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+        std = log_std.exp()
+        # 1. 生成基础高斯噪声 (球壳上的点)
+        # epsilon ~ N(0, I), 模长约为 sqrt(D)
+        epsilon = torch.randn_like(mean)
+        
+        # 2. 生成径向缩放因子 r (Radial Scaling Factor)
+        batch_size, n_act = mean.shape
+        
+        # --- 均匀体积采样 (Uniform Volume Sampling) ---
+        # 在超球体内均匀采样，r 需要服从 U[0,1]^(1/D)
+        # 否则在高维下，点会过度聚集在圆心 (Gravity Well at Center)
+        # u = torch.rand((batch_size, 1), device=obs.device)
+        # r = u.pow(1.0 / n_act) 
+        # 推荐的方案：体积均匀采样
+        u = torch.rand((batch_size, 1), device=obs.device)
+        r = u.pow(1.0 / self.n_act)  # 这里的 n_act 就是 D=61
+        x_t = mean + std * epsilon * r
+        y_t = torch.tanh(x_t)
+        action = y_t
+        mean = torch.tanh(mean)
+
+        return action, mean
+
+
+# class DSACT_EnhancedActor_VAlpha(DSACT_EnhancedActor):
+#     def __init__(
+#         self,
+#         n_obs: int,
+#         n_act: int,
+#         num_envs: int,
+#         init_scale: float,
+#         hidden_dim: int,
+#         log_std_max: float = 0.5,
+#         log_std_min: float = -20.0,
+#         scale_min: float = 0.5,
+#         scale_max: float = 2,
+#         activation: nn.Module = nn.ReLU(),
+#         use_layer_norm: bool = True,
+#         device: torch.device = None,
+#     ):
+#         super().__init__(
+#             n_obs=n_obs,
+#             n_act=n_act,
+#             num_envs=num_envs,
+#             init_scale=init_scale,
+#             hidden_dim=hidden_dim,
+#             log_std_max=log_std_max,
+#             log_std_min=log_std_min,
+#             activation=activation,
+#             use_layer_norm=use_layer_norm,
+#             device=device,
+#         )
+
+#     def forward(
+#         self, obs: torch.Tensor
+#     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+#         x = obs
+#         x = self.net(x)
+#         output = self.fc_out(x)
+#         mean, log_std = torch.chunk(output, 2, dim=-1)
+        
+#         # JAX implementation uses clip (clamp) instead of tanh squashing
+#         log_std = torch.tanh(log_std)
+#         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
+#         # log_std = torch.clamp(log_std, DSAC_LOG_STD_MIN, DSAC_LOG_STD_MAX)
+
+#         std = log_std.exp()
+#         normal = torch.distributions.Normal(mean, std)
+#         x_t = normal.rsample()
+#         y_t = torch.tanh(x_t)
+#         action = y_t
+#         log_prob = normal.log_prob(x_t)
+#         # Enforcing Action Bound
+#         log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
+#         mean = torch.tanh(mean)
+
+#         return action, log_prob, mean
+
+#     def explore(
+#         self, obs: torch.Tensor, dones: torch.Tensor = None,
+#     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+#         # If dones is provided, resample noise for environments that are done
+#         if dones is not None and dones.sum() > 0:
+#             # Generate new noise scales for done environments (one per environment)
+#             new_scales = (
+#                 torch.rand(self.n_envs, 1, device=obs.device)
+#                 * (self.scale_max - self.scale_min)
+#                 + self.scale_min
+#             )
+
+#             # Update only the noise scales for environments that are done
+#             dones_view = dones.view(-1, 1) > 0
+#             self.expl_scales.copy_(
+#                 torch.where(dones_view, new_scales, self.expl_scales)
+#             )
+
+#         x = obs
+#         x = self.net(x)
+#         mean, log_std = torch.chunk(self.fc_out(x), 2, dim=-1)
+#         log_std = torch.tanh(log_std)
+#         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1) 
+
+#         std = log_std.exp() * self.expl_scales
+#         normal = torch.distributions.Normal(mean, std)
+#         x_t = normal.rsample()
+#         y_t = torch.tanh(x_t)
+#         action = y_t
+#         log_prob = normal.log_prob(x_t)
+#         # Enforcing Action Bound
+#         log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
+
+#         mean = torch.tanh(mean)
+
+#         return action, log_prob, mean
 
 
 class DSACT_EnhancedActor_explr(DSACT_Actor_explr):
@@ -706,6 +1178,9 @@ class FastSACProActor(nn.Module):
         hidden_dim: int,
         log_std_max: float,
         log_std_min: float,
+        scale_min: float = 0.5,
+        scale_max: float = 2.0,
+        temperature: float = 1.0,
         use_tanh: bool = True,
         use_layer_norm: bool = True,
         device: torch.device | str | None = None,
@@ -742,6 +1217,14 @@ class FastSACProActor(nn.Module):
         else:
             self.register_buffer("action_bias", torch.zeros(n_act, device=device))
 
+        # Exploration scaling buffers
+        self.register_buffer("expl_scales", 
+            torch.rand(num_envs, 1, device=device) * (scale_max - scale_min) + scale_min
+        )
+        self.register_buffer("scale_min", torch.as_tensor(scale_min, device=device))
+        self.register_buffer("scale_max", torch.as_tensor(scale_max, device=device))
+        self.temperature = temperature
+
     def setup_network(self) -> None:
         """Setup the network architecture. Can be overridden by subclasses."""
         n_obs = sum(self.obs_indices[obs_key]["size"] for obs_key in self.obs_keys)
@@ -764,6 +1247,9 @@ class FastSACProActor(nn.Module):
             nn.Linear(self.hidden_dim // 4, self.n_act, device=self.device),
         )
         self.fc_logstd = nn.Linear(self.hidden_dim // 4, self.n_act, device=self.device)
+        self.fc_explore = nn.Linear(self.hidden_dim // 4, self.n_act, device=self.device)
+        
+
         nn.init.constant_(self.fc_mu[0].weight, 0.0)
         nn.init.constant_(self.fc_mu[0].bias, 0.0)
         nn.init.constant_(self.fc_logstd.weight, 0.0)
@@ -783,22 +1269,25 @@ class FastSACProActor(nn.Module):
         x = self.net(x)
         mean = self.fc_mu(x)
         log_std = self.fc_logstd(x)
+        explore = self.fc_explore(x)
         log_std = torch.tanh(log_std)
         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
             log_std + 1
         )  # From SpinUp / Denis Yarats
-
+        explr_weight_logits = explore / self.temperature
+        explr_weight_logits = torch.clamp(explr_weight_logits, -20, 20)
+        explr_weight = torch.softmax(explr_weight_logits, dim=-1) * self.n_act
         if self.use_tanh:
             tanh_mean = torch.tanh(mean)
             action = tanh_mean * self.action_scale + self.action_bias
         else:
             action = mean
 
-        return action, mean, log_std
+        return action, mean, log_std, explr_weight
 
     def get_actions_and_log_probs(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        _, mean, log_std = self(obs)
-        std = log_std.exp()
+        _, mean, log_std, explr_weight = self(obs)
+        std = explr_weight * log_std.exp()
         dist = torch.distributions.Normal(mean, std)
         raw_action = dist.rsample()
 
@@ -826,14 +1315,35 @@ class FastSACProActor(nn.Module):
     def explore(
         self, obs: torch.Tensor, dones: torch.Tensor | None = None, deterministic: bool = False
     ) -> torch.Tensor:
-        _, mean, log_std = self(obs)
+        # If dones is provided, resample noise for environments that are done
+        if dones is not None and dones.sum() > 0:
+            # Generate new noise scales for done environments (one per environment)
+            new_scales = (
+                torch.rand(self.n_envs, 1, device=obs.device)
+                * (self.scale_max - self.scale_min)
+                + self.scale_min
+            )
+
+            # Update only the noise scales for environments that are done
+            dones_view = dones.view(-1, 1) > 0
+            self.expl_scales.copy_(
+                torch.where(dones_view, new_scales, self.expl_scales)
+            )
+
+        _, mean, log_std, explr_weight = self(obs)
+        explr_weight_logits = explr_weight / self.temperature
+        explr_weight_logits = torch.clamp(explr_weight_logits, -20, 20)
+        explr_weight = torch.softmax(explr_weight_logits * self.expl_scales, dim=-1) * self.n_act
+        # explr_weight = torch.softmax(explr_weight_logits, dim=-1) * self.n_act * self.expl_scales
+        log_std = torch.tanh(log_std)
+        log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (log_std + 1)
         if deterministic:
             if self.use_tanh:
                 tanh_mean = torch.tanh(mean)
                 return tanh_mean * self.action_scale + self.action_bias
             return mean
 
-        std = log_std.exp()
+        std = explr_weight * log_std.exp()
         dist = torch.distributions.Normal(mean, std)
         raw_action = dist.rsample()
 

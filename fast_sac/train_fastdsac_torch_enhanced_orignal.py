@@ -37,7 +37,7 @@ from fast_sac_utils import (
     save_params,
 )
 from hyperparams import get_args
-from fast_sac import Actor, Critic, GaussianDistCritic, Hetero_DSACT_Actor, DSACT_EnhancedActor
+from fast_sac import Actor, Critic, GaussianDistCritic, Hetero_DSACT_Actor, DSACT_Actor
 
 torch.set_float32_matmul_precision("high")
 
@@ -168,7 +168,7 @@ def main():
     else:
         reward_normalizer = nn.Identity()
 
-    actor = DSACT_EnhancedActor(
+    actor = DSACT_Actor(
         n_obs=n_obs,
         n_act=n_act,
         num_envs=args.num_envs,
@@ -177,8 +177,6 @@ def main():
         hidden_dim=args.actor_hidden_dim,
         log_std_max=args.log_std_max,
         log_std_min=args.log_std_min,
-        scale_min=args.scale_min,
-        scale_max=args.scale_max,
         activation=activation,
         use_layer_norm=args.use_layer_norm,
     )
@@ -202,8 +200,8 @@ def main():
     # )
     # Copy params to actor_detach without grad
     # from_module(actor).data.to_module(actor_detach)
-    # policy = actor.forward
-    policy = actor.explore
+    policy = actor.forward
+    # policy = actor.explore
 
     qnet = GaussianDistCritic(
         n_obs=n_critic_obs,
@@ -406,6 +404,7 @@ def main():
                 # next_q1 = Normal(next_q1_m, next_q1_std).rsample()
                 # next_q2 = Normal(next_q2_m, next_q2_std).rsample()
                 
+                # # Add noise clamping as per reference TODO (Jolyne): change clamp range or discard clamp (rsample)?
                 z1 = torch.randn_like(next_q1_m).clamp(-3, 3)
                 z2 = torch.randn_like(next_q2_m).clamp(-3, 3)
                 next_q1 = next_q1_m + z1 * next_q1_std
@@ -582,7 +581,7 @@ def main():
             device_type=amp_device_type, dtype=amp_dtype, enabled=amp_enabled
         ):
             norm_obs = normalize_obs(obs)
-            actions, _, _ = policy(obs=norm_obs, dones=dones)
+            actions, _, _ = policy(obs=norm_obs)
 
         next_obs, rewards, dones, infos = envs.step(actions.float())
         truncations = infos["time_outs"]
