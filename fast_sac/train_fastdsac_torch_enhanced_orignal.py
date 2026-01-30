@@ -404,7 +404,6 @@ def main():
                 # next_q1 = Normal(next_q1_m, next_q1_std).rsample()
                 # next_q2 = Normal(next_q2_m, next_q2_std).rsample()
                 
-                # # Add noise clamping as per reference TODO (Jolyne): change clamp range or discard clamp (rsample)?
                 z1 = torch.randn_like(next_q1_m).clamp(-3, 3)
                 z2 = torch.randn_like(next_q2_m).clamp(-3, 3)
                 next_q1 = next_q1_m + z1 * next_q1_std
