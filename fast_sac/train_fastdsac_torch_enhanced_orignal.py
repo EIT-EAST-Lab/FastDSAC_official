@@ -231,10 +231,10 @@ def main():
     #     lr=args.actor_learning_rate,
     #     weight_decay=args.weight_decay,
     # )
-    # #TODO (Jolyne): entropy target?
+    # #TODO (): entropy target?
     # # Auto-tune target entropy based on action dimension
     # target_entropy = - float(n_act) * args.target_entropy_ratio
-    # #TODO (Jolyne): 并行化alpha，每个环境alpha独立会不会影响buffer和actor、critic的更新？
+    # #TODO (): 并行化alpha，每个环境alpha独立会不会影响buffer和actor、critic的更新？
     # log_alpha = torch.ones(1, requires_grad=True, device=device)
     # log_alpha.data.copy_(torch.tensor([np.log(args.alpha_init)], device=device))  # Start with higher alpha for exploration
     # alpha_optimizer = optim.Adam([log_alpha], lr=args.alpha_learning_rate)
@@ -415,14 +415,14 @@ def main():
 
             with torch.no_grad():
                 next_state_actions, next_state_log_pi, _ = actor(next_observations)
-                #TODO (Jolyne): use Action smoothing?
+                #TODO (): use Action smoothing?
                 next_stochaQ1_target, next_stochaQ2_target = qnet_target(next_critic_observations, next_state_actions)
                 next_q1_m, next_q1_std = next_stochaQ1_target[:, 0], next_stochaQ1_target[:, 1]
                 next_q2_m, next_q2_std = next_stochaQ2_target[:, 0], next_stochaQ2_target[:, 1]
                 # next_q1 = Normal(next_q1_m, next_q1_std).rsample()
                 # next_q2 = Normal(next_q2_m, next_q2_std).rsample()
                 
-                # # Add noise clamping as per reference TODO (Jolyne): change clamp range or discard clamp (rsample)?
+                # # Add noise clamping as per reference TODO (): change clamp range or discard clamp (rsample)?
                 z1 = torch.randn_like(next_q1_m).clamp(-3, 3)
                 z2 = torch.randn_like(next_q2_m).clamp(-3, 3)
                 next_q1 = next_q1_m + z1 * next_q1_std

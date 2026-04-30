@@ -126,7 +126,7 @@ class GaussianDistCritic(nn.Module):
         StochaQ2 = self.qnet2(obs, actions)
         return StochaQ1, StochaQ2
 
-#TODO (Jolyne): change the range?
+#TODO (): change the range?
 LOG_STD_MAX = 2
 LOG_STD_MIN = -5
 
