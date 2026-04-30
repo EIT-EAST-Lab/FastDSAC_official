@@ -7,7 +7,7 @@ chmod +x run_training_sequence.sh
 bash run_training_sequence.sh
 
 # Data
-All experimental results are in fast_sac/data/Humanoid_bench (Playground, IsaacLab)/main_result folders.
+All experimental results are in fast_sac/new_runs_data/csv_results folder.
 
 # Visualization
-To see visualizations (gif files and pictures), please check the data folders
+To see visualizations (photos and pictures), please check the "new_runs_data" folder
