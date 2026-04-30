@@ -744,7 +744,7 @@ def main():
                 "eval_avg_return": eval_avg_return,
                 "eval_avg_length": eval_avg_length,
             },
-            step=global_step + 1,
+            step=global_step,
         )
 
 

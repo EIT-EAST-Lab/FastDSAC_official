@@ -241,8 +241,10 @@ def main():
     #     lr=args.actor_learning_rate,
     #     weight_decay=args.weight_decay,
     # )
+    # #TODO (Jolyne): entropy target?
     # # Auto-tune target entropy based on action dimension
     # target_entropy = - float(n_act) * args.target_entropy_ratio
+    # #TODO (Jolyne): 并行化alpha，每个环境alpha独立会不会影响buffer和actor、critic的更新？
     # log_alpha = torch.ones(1, requires_grad=True, device=device)
     # log_alpha.data.copy_(torch.tensor([np.log(args.alpha_init)], device=device))  # Start with higher alpha for exploration
     # alpha_optimizer = optim.Adam([log_alpha], lr=args.alpha_learning_rate)
@@ -423,12 +425,14 @@ def main():
 
             with torch.no_grad():
                 next_state_actions, next_state_log_pi, _ = actor(next_observations)
+                #TODO (Jolyne): use Action smoothing?
                 next_stochaQ1_target, next_stochaQ2_target = qnet_target(next_critic_observations, next_state_actions)
                 next_q1_m, next_q1_std = next_stochaQ1_target[:, 0], next_stochaQ1_target[:, 1]
                 next_q2_m, next_q2_std = next_stochaQ2_target[:, 0], next_stochaQ2_target[:, 1]
                 # next_q1 = Normal(next_q1_m, next_q1_std).rsample()
                 # next_q2 = Normal(next_q2_m, next_q2_std).rsample()
                 
+                # # Add noise clamping as per reference TODO (Jolyne): change clamp range or discard clamp (rsample)?
                 z1 = torch.randn_like(next_q1_m).clamp(-3, 3)
                 z2 = torch.randn_like(next_q2_m).clamp(-3, 3)
                 next_q1 = next_q1_m + z1 * next_q1_std
@@ -766,10 +770,12 @@ def main():
                         # --- Grow Time-Series Heatmap ---
                         if "explr_weights_history" not in locals():
                             explr_weights_history = []
+                            explr_steps_history = []
                             
                         # Append current mean weights: Shape (61,)
                         current_mean_weights = ew.mean(0).detach().cpu().numpy()
                         explr_weights_history.append(current_mean_weights)
+                        explr_steps_history.append(global_step)
                         
                         # Generate Heatmap every N logs (e.g., every 5th log to save compute)
                         # or just always if it's fast. 61x(T) is small.
@@ -794,17 +800,16 @@ def main():
                                     )
                             except:
                                 pass # formatting error usually
+
+                            # Set custom xticks to show actual global_step values
+                            num_ticks = min(10, len(explr_steps_history))
+                            if num_ticks > 0:
+                                tick_indices = np.linspace(0, len(explr_steps_history) - 1, num_ticks, dtype=int)
+                                tick_labels = [explr_steps_history[i] for i in tick_indices]
+                                plt.xticks(ticks=tick_indices + 0.5, labels=tick_labels, rotation=45, fontsize=8)
                                 
                             plt.title("Exploration Weights Evolution")
-                            plt.xlabel(f"updates (x{args.render_interval}?) No, x{args.eval_interval} approx") 
-                            # Actually it's logged every `render_interval`? No.
-                            # It is logged in `if args.use_wandb:` block inside the loop.
-                            # The loop `if args.use_wandb:` runs every step?
-                            # Check indentation: It is inside `if global_step % args.env_step_ratio == 0:` branch?
-                            # No, usually logging is interval based.
-                            # I need to check the exact logging frequency. 
-                            # If it runs every step, `explr_weights_history` will be huge. 
-                            # I should only append if `global_step % log_interval == 0`.
+                            plt.xlabel("Train Steps")
                             
                             plt.tight_layout()
                             
@@ -861,7 +866,7 @@ def main():
                 "eval_avg_return": eval_avg_return,
                 "eval_avg_length": eval_avg_length,
             },
-            step=global_step + 1,
+            step=global_step,
         )
 
 

@@ -186,14 +186,14 @@ def main():
         lr=args.critic_learning_rate,
         weight_decay=args.weight_decay,
         fused=args.fused_adam,
-        betas=(0.9, 0.95) if args.tuned_betas else (0.9, 0.999),
+        betas=(0.9, 0.95),
     )
     actor_optimizer = optim.AdamW(
         list(actor.parameters()),
         lr=args.actor_learning_rate,
         weight_decay=args.weight_decay,
         fused=args.fused_adam,
-        betas=(0.9, 0.95) if args.tuned_betas else (0.9, 0.999),
+        betas=(0.9, 0.95),
     )
 
     target_entropy = 0.0
@@ -203,7 +203,7 @@ def main():
         [log_alpha], 
         lr=args.alpha_learning_rate,
         fused=args.fused_adam,
-        betas=(0.9, 0.999),
+        betas=(0.9, 0.95),
     )
     rb = SimpleReplayBuffer(
         n_env=args.num_envs,

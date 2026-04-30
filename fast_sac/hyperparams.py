@@ -131,7 +131,7 @@ class BaseArgs:
     """log_std_max_range for hetero exploration"""
     bound_beta: float = 3.0
     """bound beta for TD bound"""
-    bias: float = 0.1
+    bias: float = 0.000001
     """bias"""
     substitution: bool = True
     """substitution"""
