@@ -35,17 +35,13 @@ python fast_sac/train_fastdsac_torch_enhanced_learned_temperature.py --env_name 
 # h1hand_stair
 # h1hand_slide
 # h1hand_pole
-# h1hand_push
-# h1hand_cabinet
 # h1hand_door
-# h1hand_truck
 # h1hand_cube
 # h1hand_bookshelf_simple
 # h1hand_bookshelf_hard
 # h1hand_basketball
 # h1hand_window
 # h1hand_spoon
-# h1hand_package
 # h1hand_powerlift
 # h1hand_room
 # h1hand_insert_small
