@@ -1,1 +1,16 @@
 *.pyc
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+
+# Local experiment outputs
+wandb/
+runs/
+logs/
+models/
+checkpoints/
+
+# External benchmark checkouts are installed following the FastTD3 instructions.
+src/humanoid-bench/

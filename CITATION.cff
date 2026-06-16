@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: "FastDSAC: Unlocking the Potential of Maximum Entropy RL in High-Dimensional Humanoid Control"
+message: "If you use FastDSAC, please cite the arXiv preprint."
+type: software
+authors:
+  - family-names: Xue
+    given-names: Jun
+  - family-names: Wang
+    given-names: Junze
+  - family-names: Wang
+    given-names: Shanze
+  - family-names: Zhang
+    given-names: Xinming
+  - family-names: Chen
+    given-names: Yanjun
+  - family-names: Zhang
+    given-names: Wei
+repository-code: "https://github.com/EIT-EAST-Lab/FastDSAC_official"
+url: "https://arxiv.org/abs/2603.12612"
+doi: "10.48550/arXiv.2603.12612"
+date-released: "2026-03-13"
+license: MIT
