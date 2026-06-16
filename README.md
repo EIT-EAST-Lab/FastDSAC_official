@@ -1,10 +1,14 @@
 # FastDSAC
 
+[![arXiv](https://img.shields.io/badge/arXiv-2603.12612-b31b1b.svg)](https://arxiv.org/abs/2603.12612)
+[![PDF](https://img.shields.io/badge/PDF-arXiv-blue.svg)](https://arxiv.org/pdf/2603.12612)
+[![Project Page](https://img.shields.io/badge/Project-Page-0f766e.svg)](https://eit-east-lab.github.io/FastDSAC/)
+[![Code](https://img.shields.io/badge/code-GitHub-black.svg)](https://github.com/EIT-EAST-Lab/FastDSAC_official)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Official implementation of **FastDSAC: Unlocking the Potential of Maximum Entropy RL in High-Dimensional Humanoid Control**.
 
 FastDSAC scales maximum entropy stochastic reinforcement learning to high-dimensional humanoid control. The method combines **Dimension-wise Entropy Modulation (DEM)** for structured exploration with a **continuous distributional critic** for stable value estimation in large action spaces.
-
-[Paper](https://arxiv.org/abs/2603.12612) | [Code](https://github.com/EIT-EAST-Lab/FastDSAC_official)
 
 ## Highlights
 
@@ -12,7 +16,19 @@ FastDSAC scales maximum entropy stochastic reinforcement learning to high-dimens
 - DEM reallocates exploration variance across action dimensions instead of applying uniform Gaussian noise.
 - A continuous Gaussian distributional critic avoids fixed C51 supports and reduces value-estimation artifacts.
 - Evaluated on HumanoidBench, MuJoCo Playground, and IsaacLab.
-- Includes released result CSVs, paper figures, and demo videos for simulation and real-robot rollouts.
+- Achieves strong returns on difficult HumanoidBench tasks, including Basketball near 900 and Balance Hard near 700.
+- Includes released results, paper figures, and demo videos for simulation and real-robot rollouts.
+
+## Key Results
+
+<p align="center">
+  <img src="fast_sac/new_runs_data/plots/final_iqm_balance_basketball.png" width="72%" alt="Basketball and Balance Hard final IQM results">
+</p>
+
+<p align="center">
+  <img src="fast_sac/new_runs_data/plots/basketball_teaser.png" width="48%" alt="Basketball learning curves">
+  <img src="fast_sac/new_runs_data/plots/balance_hard_teaser.png" width="48%" alt="Balance Hard learning curves">
+</p>
 
 ## Repository Layout
 
@@ -135,61 +151,20 @@ python fast_sac/train_fastdsac_torch_enhanced.py \
 
 ### Auto-temperature DEM
 
-```bash
-python fast_sac/train_fastdsac_torch_enhanced_learned_temperature.py \
-  --env_name h1hand-stand-v0 \
-  --exp_name FastDSAC_auto_tau_stand \
-  --total_timesteps 50000 \
-  --temperature 1 \
-  --use_layer_norm
-```
+The auto-temperature DEM variant is implemented in `fast_sac/train_fastdsac_torch_enhanced_learned_temperature.py`. Keep task and training parameters consistent with the corresponding FastDSAC runs when comparing this variant.
 
 ## Released Results
 
-Result tables and plotting outputs are included under:
+We release result tables and plotting outputs under:
 
 ```text
 fast_sac/new_runs_data/csv_results/
 fast_sac/new_runs_data/plots/
 ```
 
-Key released artifacts include:
-
-- `fastdsac_results_hb_new.csv`: HumanoidBench FastDSAC results.
-- `fastdsac_results_pg_new.csv`: MuJoCo Playground FastDSAC results.
-- `fastdsac_results_il_new.csv`: IsaacLab FastDSAC results.
-- `humanoidbench_all_baselines_comparison.*`: full HumanoidBench comparison.
-- `isaacLab_playground_comparison.*`: IsaacLab and MuJoCo Playground comparison.
-- `wallclock_probe_extended_comparison.*`: wall-clock comparison against FastTD3.
-- `basketball_*`, `balance_hard_*`, `layernorm_*`, and `critic_ablation_*`: ablation and teaser figures.
-
 ## Demo Videos
 
-Real-robot Unitree G1 rollouts:
-
-```text
-demo_videos/locomotion_forward_backward.mp4
-demo_videos/motion_tracking.mp4
-demo_videos/robustness_test.mp4
-```
-
-HumanoidBench comparisons:
-
-```text
-demo_videos/HBtask_demo_videos/FastDSAC_balance_hard.gif
-demo_videos/HBtask_demo_videos/FastDSAC_basketball.gif
-demo_videos/HBtask_demo_videos/FastTD3_balance_hard.mp4
-demo_videos/HBtask_demo_videos/FastTD3_basketball.mp4
-```
-
-MuJoCo Playground rollouts:
-
-```text
-demo_videos/MPtask_demo_videos/G1JoystickFlatTerrain.mp4
-demo_videos/MPtask_demo_videos/G1JoystickRoughTerrain.mp4
-demo_videos/MPtask_demo_videos/T1JoystickFlatTerrain.mp4
-demo_videos/MPtask_demo_videos/T1RoughFlatTerrain.mp4
-```
+We include demo videos for real-robot Unitree G1 transfer, HumanoidBench comparisons, and MuJoCo Playground rollouts under `demo_videos/`.
 
 ## Citation
 
