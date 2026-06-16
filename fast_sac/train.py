@@ -154,6 +154,7 @@ def main():
         device=device,
         init_scale=args.init_scale,
         hidden_dim=args.actor_hidden_dim,
+        use_layer_norm=args.use_layer_norm,
     )
     actor_detach = Actor(
         n_obs=n_obs,
@@ -162,6 +163,7 @@ def main():
         device=device,
         init_scale=args.init_scale,
         hidden_dim=args.actor_hidden_dim,
+        use_layer_norm=args.use_layer_norm,
     )
     # Copy params to actor_detach without grad
     from_module(actor).data.to_module(actor_detach)

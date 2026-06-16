@@ -9,18 +9,19 @@ class QNetwork(nn.Module):
         n_obs: int,
         n_act: int,
         hidden_dim: int,
+        use_layer_norm: bool = True,
         device: torch.device = None,
     ):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(n_obs + n_act, hidden_dim, device=device),
-            nn.LayerNorm(hidden_dim, device=device),
+            nn.LayerNorm(hidden_dim, device=device) if use_layer_norm else nn.Identity(),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2, device=device),
-            nn.LayerNorm(hidden_dim // 2, device=device),
+            nn.LayerNorm(hidden_dim // 2, device=device) if use_layer_norm else nn.Identity(),
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, hidden_dim // 4, device=device),
-            nn.LayerNorm(hidden_dim // 4, device=device),
+            nn.LayerNorm(hidden_dim // 4, device=device) if use_layer_norm else nn.Identity(),
             nn.ReLU(),
             nn.Linear(hidden_dim // 4, 1, device=device),
         )
@@ -68,6 +69,7 @@ class Critic(nn.Module):
         n_obs: int,
         n_act: int,
         hidden_dim: int,
+        use_layer_norm: bool = True,
         device: torch.device = None,
     ):
         super().__init__()
@@ -75,12 +77,14 @@ class Critic(nn.Module):
             n_obs=n_obs,
             n_act=n_act,
             hidden_dim=hidden_dim,
+            use_layer_norm=use_layer_norm,
             device=device,
         )
         self.qnet2 = QNetwork(
             n_obs=n_obs,
             n_act=n_act,
             hidden_dim=hidden_dim,
+            use_layer_norm=use_layer_norm,
             device=device,
         )
 
